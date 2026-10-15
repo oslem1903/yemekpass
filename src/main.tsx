@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import './style.css';
 type Company={id:string;name:string};
 type Entitlement={id:string;employee_id:string;category_id:string;granted:number;used:number;employee_name:string;category_name:string;company_name:string;valid_from:string;valid_until:string};
+type Redemption={id:string;created_at:string;amount_kurus:number;employee_name:string;company_name:string;category_name:string;restaurant_name:string};
 type Employee={id:string;name:string;company_id:string;company_name:string;active:boolean};
 async function request<T>(path:string,method='GET',body?:object):Promise<T>{
  const r=await fetch('/api/'+path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
@@ -13,6 +14,7 @@ function App(){
  const [companies,setCompanies]=React.useState<Company[]>([]);
  const [employees,setEmployees]=React.useState<Employee[]>([]);
  const [entitlements,setEntitlements]=React.useState<Entitlement[]>([]);
+ const [redemptions,setRedemptions]=React.useState<Redemption[]>([]);
  const [mealEmployee,setMealEmployee]=React.useState('');
  const [mealName,setMealName]=React.useState('Tavuk + Sebze');
  const [mealCount,setMealCount]=React.useState(3);
@@ -29,8 +31,8 @@ function App(){
  const [testResult,setTestResult]=React.useState('');
  const [online,setOnline]=React.useState(false);
  const refresh=React.useCallback(async()=>{try{
- const [c,e,rights]=await Promise.all([request<Company[]>('companies'),request<Employee[]>('employees'),request<Entitlement[]>('entitlements')]);
- setCompanies(c);setEmployees(e);setEntitlements(rights);setOnline(true);setError('');
+ const [c,e,rights,history]=await Promise.all([request<Company[]>('companies'),request<Employee[]>('employees'),request<Entitlement[]>('entitlements'),request<Redemption[]>('redemptions')]);
+ setCompanies(c);setEmployees(e);setEntitlements(rights);setRedemptions(history);setOnline(true);setError('');
  }catch(err){setOnline(false);setError((err as Error).message)}},[]);
  React.useEffect(()=>{void refresh()},[refresh]);
  async function addCompany(ev:React.FormEvent){ev.preventDefault();setBusy(true);try{
@@ -49,7 +51,7 @@ function App(){
  {tab==='Firmalar'&&<><article><h2>Yeni firma ekle</h2><form onSubmit={addCompany}><label>Firma adı <input required minLength={2} maxLength={160} value={name} onChange={e=>setName(e.target.value)} placeholder="Örn. ABC İnşaat"/></label> <button disabled={busy||!online}>Firma kaydet</button></form></article><h2>Kayıtlı firmalar</h2><CompanyTable companies={companies}/></>}
  {tab==='Personeller'&&<><article><h2>Personel ekle</h2><form onSubmit={addEmployee}><label>Firma <select required value={companyId} onChange={e=>setCompanyId(e.target.value)}><option value="">Firma seçin</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label> <label>Personel adı <input required minLength={2} maxLength={160} value={employeeName} onChange={e=>setEmployeeName(e.target.value)}/></label> <button disabled={busy||!online}>Personel kaydet</button></form></article><article><h2>Personel listesi</h2><table><thead><tr><th>Ad</th><th>Firma</th><th>Durum</th></tr></thead><tbody>{employees.map(e=><tr key={e.id}><td>{e.name}</td><td>{e.company_name}</td><td>{e.active?'Aktif':'Pasif'}</td></tr>)}</tbody></table>{employees.length===0&&<p>Henüz personel yok.</p>}</article></>}
  {tab==='Yemek Hakları'&&<><article><h2>Yemek hakkı tanımla</h2><form onSubmit={addMeal} className="meal-form"><label>Personel<select required value={mealEmployee} onChange={e=>setMealEmployee(e.target.value)}><option value="">Personel seç</option>{employees.map(e=><option key={e.id} value={e.id}>{e.name} — {e.company_name}</option>)}</select></label><label>Yemek türü<input required value={mealName} onChange={e=>setMealName(e.target.value)} minLength={2}/></label><label>Adet<input type="number" required min={1} max={1000} value={mealCount} onChange={e=>setMealCount(Number(e.target.value))}/></label><label>Birim fiyat (TL)<input type="number" required min={0} step="0.01" value={mealPrice} onChange={e=>setMealPrice(Number(e.target.value))}/></label><label>Ödeme modeli<select value={mealModel} onChange={e=>setMealModel(e.target.value)}><option value="postpaid">Ay sonu</option><option value="prepaid">Ön ödemeli</option></select></label><label>Başlangıç<input type="date" required value={fromDate} onChange={e=>setFromDate(e.target.value)}/></label><label>Bitiş<input type="date" required value={untilDate} onChange={e=>setUntilDate(e.target.value)}/></label><button disabled={!online||busy}>Yemek hakkını kaydet</button></form></article><article><h2>Tanımlı haklar</h2><table><thead><tr><th>Firma</th><th>Personel</th><th>Yemek</th><th>Verilen</th><th>Kullanılan</th><th>Kalan</th></tr></thead><tbody>{entitlements.map(e=><tr key={e.id}><td>{e.company_name}</td><td>{e.employee_name}</td><td>{e.category_name}</td><td>{e.granted}</td><td>{e.used}</td><td>{e.granted-e.used}</td></tr>)}</tbody></table>{entitlements.length===0&&<p>Henüz yemek hakkı tanımlanmadı.</p>}</article></>}
- {tab==='QR İşlemleri'&&<article><h2>Yerel tüketim testi</h2><p>Yalnızca yerel test içindir. QR okutma ve kullanıcı doğrulaması henüz uygulanmadı.</p><label>Yemek hakkı <select value={testEntitlement} onChange={e=>setTestEntitlement(e.target.value)}><option value="">Hak seçin</option>{entitlements.map(e=><option key={e.id} value={e.id}>{e.employee_name} — {e.category_name} — Kalan: {e.granted-e.used}</option>)}</select></label> <button disabled={!online||busy||!testEntitlement} onClick={()=>void testRedeem()}>Bir öğün tüket (TEST)</button>{testResult&&<p role="status">{testResult}</p>}</article>}
+ {tab==='QR İşlemleri'&&<article><h2>Yerel tüketim testi</h2><p>Yalnızca yerel test içindir. QR okutma ve kullanıcı doğrulaması henüz uygulanmadı.</p><label>Yemek hakkı <select value={testEntitlement} onChange={e=>setTestEntitlement(e.target.value)}><option value="">Hak seçin</option>{entitlements.map(e=><option key={e.id} value={e.id}>{e.employee_name} — {e.category_name} — Kalan: {e.granted-e.used}</option>)}</select></label> <button disabled={!online||busy||!testEntitlement} onClick={()=>void testRedeem()}>Bir öğün tüket (TEST)</button>{testResult&&<p role="status">{testResult}</p>}</article>}{tab==='QR İşlemleri'&&<article><h2>Son tüketimler (en fazla 100)</h2><table><thead><tr><th>Tarih</th><th>Personel</th><th>Firma</th><th>Yemek</th><th>Tutar</th></tr></thead><tbody>{redemptions.map(r=><tr key={r.id}><td>{new Date(r.created_at).toLocaleString('tr-TR')}</td><td>{r.employee_name}</td><td>{r.company_name}</td><td>{r.category_name}</td><td>{(r.amount_kurus/100).toFixed(2)} TL</td></tr>)}</tbody></table>{redemptions.length===0&&<p>Henüz tüketim yok.</p>}</article>}
  {['Cari Hesap','Raporlar'].includes(tab)&&<article><h2>{tab}</h2><p>Bu modül henüz aktif değil.</p></article>}
  </main></div>;
 }
