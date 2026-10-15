@@ -1,6 +1,6 @@
 import http from 'node:http';
 import {Pool} from 'pg';
-import {randomUUID,randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
+import {randomUUID,randomBytes,scryptSync,timingSafeEqual,createHmac} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 const env=readFileSync(resolve(process.cwd(),'..','.env'),'utf8');
@@ -10,6 +10,17 @@ const adminPassword=env.match(/^YEMEKPASS_ADMIN_PASSWORD=(.+)$/m)?.[1]?.trim();
 if(!adminPassword||adminPassword.length<16)throw Error('Set YEMEKPASS_ADMIN_PASSWORD (at least 16 characters) in root .env');
 const salt=randomBytes(32);
 const passwordHash=scryptSync(adminPassword,salt,64);
+const qrSecret=randomBytes(32);
+const qrSign=data=>createHmac('sha256',qrSecret).update(data).digest('base64url');
+const qrVerify=token=>{
+ if(typeof token!=='string'||token.length>512)return null;
+ const parts=token.split('.');if(parts.length!==2)return null;
+ const [payload,signature]=parts;
+ const expected=qrSign(payload);
+ const x=Buffer.from(signature),y=Buffer.from(expected);
+ if(x.length!==y.length||!timingSafeEqual(x,y))return null;
+ try{const value=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));if(!Number.isSafeInteger(value.exp)||value.exp<Date.now()||value.exp>Date.now()+120000)return null;return value}catch{return null}
+};
 const sessions=new Map();
 const loginFailures=new Map();
 const sessionDurationMs=8*60*60*1000;
@@ -130,9 +141,20 @@ if(req.method==='GET'&&path==='/api/redemptions'){
  return send(res,200,r.rows);
 }
 if(req.method==='GET'&&path==='/api/entitlements'){const r=await pool.query(`SELECT e.id,e.employee_id,e.category_id,e.granted,e.used,e.valid_from,e.valid_until,emp.name AS employee_name,mc.name AS category_name,c.name AS company_name FROM entitlements e JOIN employees emp ON emp.id=e.employee_id JOIN companies c ON c.id=emp.company_id JOIN meal_categories mc ON mc.id=e.category_id ORDER BY emp.name,mc.name`);return send(res,200,r.rows)}
-if(req.method==='POST'&&path==='/api/local-test/redeem'){
+if(req.method==='POST'&&path==='/api/qr/token'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ if(!uuid.test(b.entitlement_id))return send(res,400,{error:'Geçerli yemek hakkı seçin'});
+ const found=await pool.query('SELECT id FROM entitlements WHERE id=$1',[b.entitlement_id]);
+ if(!found.rowCount)return send(res,404,{error:'Yemek hakkı bulunamadı'});
+ const exp=Date.now()+60000;
+ const payload=Buffer.from(JSON.stringify({entitlement_id:b.entitlement_id,exp,nonce:randomUUID()})).toString('base64url');
+ return send(res,200,{token:payload+'.'+qrSign(payload),expires_at:new Date(exp).toISOString(),test_only:true});
+}
+if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem')){
+ const b=await read(req);
+ if(path==='/api/qr/redeem'){const verified=qrVerify(b.token);if(!verified)return send(res,401,{error:'QR süresi dolmuş veya kod geçersiz'});b.entitlement_id=verified.entitlement_id;b.idempotency_key=verified.nonce}
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
  if(!uuid.test(b.entitlement_id)||!uuid.test(b.idempotency_key))return send(res,400,{error:'Geçerli hak ve işlem anahtarı gerekli'});
  const client=await pool.connect();
  try{
