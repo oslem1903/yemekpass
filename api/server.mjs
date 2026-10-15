@@ -154,7 +154,7 @@ if(req.method==='POST'&&path==='/api/qr/token'){
 if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem')){
  const b=await read(req);
  if(path==='/api/qr/redeem'){const verified=qrVerify(b.token);if(!verified)return send(res,401,{error:'QR süresi dolmuş veya kod geçersiz'});b.entitlement_id=verified.entitlement_id;b.idempotency_key=verified.nonce}
- const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
  if(!uuid.test(b.entitlement_id)||!uuid.test(b.idempotency_key))return send(res,400,{error:'Geçerli hak ve işlem anahtarı gerekli'});
  const client=await pool.connect();
  try{
