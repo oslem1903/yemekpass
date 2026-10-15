@@ -10,3 +10,10 @@
  .ledger-print table {width:100%;font-size:10pt}
  .ledger-print tr {break-inside:avoid}
 }
+
+@media print {
+ .report-controls, .report-note {display:none!important}
+ .ledger-print {font-size:11pt}
+ .ledger-print h2 {margin-bottom:14px}
+ .ledger-print tfoot {font-weight:700;border-top:2px solid #333}
+}
