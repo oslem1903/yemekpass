@@ -11,6 +11,7 @@ if(!adminPassword||adminPassword.length<16)throw Error('Set YEMEKPASS_ADMIN_PASS
 const salt=randomBytes(32);
 const passwordHash=scryptSync(adminPassword,salt,64);
 const sessions=new Map();
+const loginFailures=new Map();
 const sessionDurationMs=8*60*60*1000;
 const cookieName='yp_session';
 const cookieValue=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1);
@@ -32,10 +33,19 @@ if(!['GET','HEAD','OPTIONS'].includes(req.method)){
 
 if(req.method==='GET'&&path==='/api/session')return send(res,200,{authenticated:validSession(req)});
 if(req.method==='POST'&&path==='/api/login'){
+ const key=req.socket.remoteAddress||'local';
+ const attempts=loginFailures.get(key)||{count:0,until:0};
+ if(attempts.until>Date.now())return send(res,429,{error:'Çok fazla hatalı giriş. Biraz bekleyin'});
  const b=await read(req);
  if(typeof b.password!=='string'||b.password.length>1024)return send(res,400,{error:'Geçersiz parola'});
  const candidate=scryptSync(b.password,salt,64);
- if(!timingSafeEqual(candidate,passwordHash))return send(res,401,{error:'Parola hatalı'});
+ if(!timingSafeEqual(candidate,passwordHash)){
+  attempts.count++;
+  if(attempts.count>=5){attempts.until=Date.now()+15*60*1000;attempts.count=0}
+  loginFailures.set(key,attempts);
+  return send(res,401,{error:'Parola hatalı'});
+ }
+ loginFailures.delete(key);
  const token=randomBytes(32).toString('hex');
  sessions.set(token,Date.now()+sessionDurationMs);
  res.setHeader('Set-Cookie',cookieName+'='+token+'; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800');
