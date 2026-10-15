@@ -13,6 +13,14 @@ const validName=v=>typeof v==='string'&&v.trim().length>=2&&v.trim().length<=160
 const server=http.createServer(async(req,res)=>{
 try{
 const path=new URL(req.url,'http://127.0.0.1').pathname;
+const origin=req.headers.origin;
+if(!['GET','HEAD','OPTIONS'].includes(req.method)){
+ const allowed=new Set(['http://localhost:5173','http://127.0.0.1:5173']);
+ if(!origin||!allowed.has(origin))return send(res,403,{error:'İstek yalnızca yerel YemekPASS arayüzünden yapılabilir'});
+ const type=(req.headers['content-type']||'').split(';')[0].trim().toLowerCase();
+ if(type!=='application/json')return send(res,415,{error:'JSON içerik türü gerekli'});
+}
+
 if(req.method==='GET'&&path==='/api/health'){await pool.query('select 1');return send(res,200,{ok:true})}
 if(req.method==='GET'&&path==='/api/companies'){const r=await pool.query('select id,name from companies order by name');return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/companies'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Firma adı 2-160 karakter olmalı'});const r=await pool.query('insert into companies(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
