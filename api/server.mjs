@@ -1,11 +1,20 @@
 import http from 'node:http';
 import {Pool} from 'pg';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 const env=readFileSync(resolve(process.cwd(),'..','.env'),'utf8');
 const password=env.match(/^POSTGRES_PASSWORD=(.+)$/m)?.[1]?.trim();
 if(!password)throw Error('Missing POSTGRES_PASSWORD in root .env');
+const adminPassword=env.match(/^YEMEKPASS_ADMIN_PASSWORD=(.+)$/m)?.[1]?.trim();
+if(!adminPassword||adminPassword.length<16)throw Error('Set YEMEKPASS_ADMIN_PASSWORD (at least 16 characters) in root .env');
+const salt=randomBytes(32);
+const passwordHash=scryptSync(adminPassword,salt,64);
+const sessions=new Map();
+const sessionDurationMs=8*60*60*1000;
+const cookieName='yp_session';
+const cookieValue=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1);
+const validSession=req=>{const token=cookieValue(req);if(!token)return false;const expires=sessions.get(token);if(!expires)return false;if(expires<Date.now()){sessions.delete(token);return false}return true};
 const pool=new Pool({host:'127.0.0.1',port:5439,database:'yemekpass',user:'yemekpass',password});
 const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
 const read=async(req)=>{let s='';for await(const c of req){s+=c;if(s.length>12000)throw Error('Request too large')}return JSON.parse(s||'{}')};
@@ -21,6 +30,23 @@ if(!['GET','HEAD','OPTIONS'].includes(req.method)){
  if(type!=='application/json')return send(res,415,{error:'JSON içerik türü gerekli'});
 }
 
+if(req.method==='GET'&&path==='/api/session')return send(res,200,{authenticated:validSession(req)});
+if(req.method==='POST'&&path==='/api/login'){
+ const b=await read(req);
+ if(typeof b.password!=='string'||b.password.length>1024)return send(res,400,{error:'Geçersiz parola'});
+ const candidate=scryptSync(b.password,salt,64);
+ if(!timingSafeEqual(candidate,passwordHash))return send(res,401,{error:'Parola hatalı'});
+ const token=randomBytes(32).toString('hex');
+ sessions.set(token,Date.now()+sessionDurationMs);
+ res.setHeader('Set-Cookie',cookieName+'='+token+'; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800');
+ return send(res,200,{authenticated:true});
+}
+if(req.method==='POST'&&path==='/api/logout'){
+ const token=cookieValue(req);if(token)sessions.delete(token);
+ res.setHeader('Set-Cookie',cookieName+'=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0');
+ return send(res,200,{authenticated:false});
+}
+if(!validSession(req))return send(res,401,{error:'Yönetici girişi gerekli'});
 if(req.method==='GET'&&path==='/api/health'){await pool.query('select 1');return send(res,200,{ok:true})}
 if(req.method==='GET'&&path==='/api/companies'){const r=await pool.query('select id,name from companies order by name');return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/companies'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Firma adı 2-160 karakter olmalı'});const r=await pool.query('insert into companies(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
