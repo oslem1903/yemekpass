@@ -59,7 +59,7 @@ function App(){
  }catch(err){setError((err as Error).message)}finally{setBusy(false)}}
  async function addMeal(ev:React.FormEvent){ev.preventDefault();const person=employees.find(e=>e.id===mealEmployee);if(!person){setError('Personel seçin');return}setBusy(true);try{await request('meal-setup','POST',{company_id:person.company_id,employee_id:person.id,category_name:mealName,granted:mealCount,price_kurus:Math.round(mealPrice*100),payment_model:mealModel,valid_from:fromDate,valid_until:untilDate});await refresh()}catch(err){setError((err as Error).message)}finally{setBusy(false)}}
  async function addPayment(ev:React.FormEvent){ev.preventDefault();const agreement=ledgerSummaries.find(x=>x.agreement_id===paymentAgreement);if(!agreement){setError('Firma anlaşması seçin');return}
- const clean=paymentAmount.trim().replace(',','.');if(!/^\\d{1,9}(?:\\.\\d{1,2})?$/.test(clean)){setError('Geçerli TL tutarı girin (en fazla iki ondalık)');return}
+ const clean=paymentAmount.trim().replace(',','.');if(!/^\d{1,9}(?:\.\d{1,2})?$/.test(clean)){setError('Geçerli TL tutarı girin (en fazla iki ondalık)');return}
  const [lira,kurus='']=clean.split('.');const amount=Number(lira)*100+Number(kurus.padEnd(2,'0'));if(!Number.isSafeInteger(amount)||amount<1){setError('Tutar sıfırdan büyük olmalı');return}
  const entry_type=agreement.payment_model==='prepaid'?'advance':'collection';
  const same=pendingPayment.current&&pendingPayment.current.agreement_id===paymentAgreement&&pendingPayment.current.entry_type===entry_type&&pendingPayment.current.amount_kurus===amount;
