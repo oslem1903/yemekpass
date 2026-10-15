@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: yemekpass
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: yemekpass
+    ports:
+      - "127.0.0.1:5439:5432"
+    volumes:
+      - yemekpass_pgdata:/var/lib/postgresql/data
+      - ./local-db/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yemekpass -d yemekpass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  yemekpass_pgdata:
