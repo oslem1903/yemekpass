@@ -21,6 +21,42 @@ if(req.method==='POST'&&path==='/api/restaurants'){const b=await read(req);if(!v
 if(req.method==='GET'&&path==='/api/employees'){const r=await pool.query('select e.id,e.name,e.active,e.company_id,c.name as company_name from employees e join companies c on c.id=e.company_id order by c.name,e.name');return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/employees'){const b=await read(req);if(!validName(b.name)||typeof b.company_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.company_id))return send(res,400,{error:'Geçerli personel adı ve firma seçin'});const r=await pool.query('insert into employees(id,name,company_id) values($1,$2,$3) returning id,name,company_id,active',[randomUUID(),b.name.trim(),b.company_id]);return send(res,201,r.rows[0])}
 if(req.method==='GET'&&path==='/api/entitlements'){const r=await pool.query(`SELECT e.id,e.employee_id,e.category_id,e.granted,e.used,e.valid_from,e.valid_until,emp.name AS employee_name,mc.name AS category_name,c.name AS company_name FROM entitlements e JOIN employees emp ON emp.id=e.employee_id JOIN companies c ON c.id=emp.company_id JOIN meal_categories mc ON mc.id=e.category_id ORDER BY emp.name,mc.name`);return send(res,200,r.rows)}
+if(req.method==='POST'&&path==='/api/local-test/redeem'){
+ const b=await read(req);
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ if(!uuid.test(b.entitlement_id)||!uuid.test(b.idempotency_key))return send(res,400,{error:'Geçerli hak ve işlem anahtarı gerekli'});
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  const previous=await client.query('SELECT id,entitlement_id,amount_kurus FROM redemptions WHERE idempotency_key=$1',[b.idempotency_key]);
+  if(previous.rowCount){
+   await client.query('ROLLBACK');
+   if(previous.rows[0].entitlement_id!==b.entitlement_id)return send(res,409,{error:'İşlem anahtarı başka hak için kullanılmış'});
+   return send(res,200,{ok:true,repeated:true,redemption_id:previous.rows[0].id});
+  }
+  const r=await client.query(`SELECT e.id,e.granted,e.used,e.valid_from,e.valid_until,mc.price_kurus,a.id AS agreement_id,a.payment_model,a.restaurant_id,emp.active
+  FROM entitlements e JOIN employees emp ON emp.id=e.employee_id JOIN meal_categories mc ON mc.id=e.category_id
+  JOIN agreements a ON a.id=mc.agreement_id AND a.company_id=emp.company_id
+  WHERE e.id=$1 AND a.active=true FOR UPDATE OF e`,[b.entitlement_id]);
+  if(!r.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'Aktif yemek hakkı bulunamadı'})}
+  const x=r.rows[0];
+  const today=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Istanbul'});
+  const dateOnly=v=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
+  if(!x.active||x.used>=x.granted||today<dateOnly(x.valid_from)||today>dateOnly(x.valid_until)){
+   await client.query('ROLLBACK');return send(res,409,{error:'Kullanılabilir yemek hakkı yok veya tarih geçersiz'});
+  }
+  if(x.payment_model==='prepaid'){
+   const balance=await client.query(`SELECT COALESCE(SUM(CASE WHEN entry_type='advance' THEN amount_kurus WHEN entry_type='consumption' THEN -amount_kurus ELSE 0 END),0)::bigint AS balance FROM ledger_entries WHERE agreement_id=$1`,[x.agreement_id]);
+   if(BigInt(balance.rows[0].balance)<BigInt(x.price_kurus)){await client.query('ROLLBACK');return send(res,409,{error:'Firma avansı yetersiz'})}
+  }
+  const redemptionId=randomUUID();
+  await client.query('UPDATE entitlements SET used=used+1 WHERE id=$1',[x.id]);
+  await client.query('INSERT INTO redemptions(id,entitlement_id,restaurant_id,amount_kurus,idempotency_key) VALUES($1,$2,$3,$4,$5)',[redemptionId,x.id,x.restaurant_id,x.price_kurus,b.idempotency_key]);
+  if(BigInt(x.price_kurus)>0)await client.query("INSERT INTO ledger_entries(agreement_id,redemption_id,entry_type,amount_kurus) VALUES($1,$2,'consumption',$3)",[x.agreement_id,redemptionId,x.price_kurus]);
+  await client.query('COMMIT');
+  return send(res,201,{ok:true,redemption_id:redemptionId,remaining:x.granted-x.used-1,amount_kurus:Number(x.price_kurus)});
+ }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return send(res,409,{error:'Bu işlem zaten işlendi'});throw e}finally{client.release()}
+}
 if(req.method==='POST'&&path==='/api/meal-setup'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
