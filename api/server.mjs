@@ -20,6 +20,13 @@ if(req.method==='GET'&&path==='/api/restaurants'){const r=await pool.query('sele
 if(req.method==='POST'&&path==='/api/restaurants'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Lokanta adı 2-160 karakter olmalı'});const r=await pool.query('insert into restaurants(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
 if(req.method==='GET'&&path==='/api/employees'){const r=await pool.query('select e.id,e.name,e.active,e.company_id,c.name as company_name from employees e join companies c on c.id=e.company_id order by c.name,e.name');return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/employees'){const b=await read(req);if(!validName(b.name)||typeof b.company_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.company_id))return send(res,400,{error:'Geçerli personel adı ve firma seçin'});const r=await pool.query('insert into employees(id,name,company_id) values($1,$2,$3) returning id,name,company_id,active',[randomUUID(),b.name.trim(),b.company_id]);return send(res,201,r.rows[0])}
+if(req.method==='GET'&&path==='/api/redemptions'){
+ const r=await pool.query(`SELECT r.id,r.created_at,r.amount_kurus,emp.name AS employee_name,c.name AS company_name,mc.name AS category_name,rest.name AS restaurant_name
+ FROM redemptions r JOIN entitlements e ON e.id=r.entitlement_id JOIN employees emp ON emp.id=e.employee_id
+ JOIN companies c ON c.id=emp.company_id JOIN meal_categories mc ON mc.id=e.category_id
+ JOIN restaurants rest ON rest.id=r.restaurant_id ORDER BY r.created_at DESC,r.id DESC LIMIT 100`);
+ return send(res,200,r.rows);
+}
 if(req.method==='GET'&&path==='/api/entitlements'){const r=await pool.query(`SELECT e.id,e.employee_id,e.category_id,e.granted,e.used,e.valid_from,e.valid_until,emp.name AS employee_name,mc.name AS category_name,c.name AS company_name FROM entitlements e JOIN employees emp ON emp.id=e.employee_id JOIN companies c ON c.id=emp.company_id JOIN meal_categories mc ON mc.id=e.category_id ORDER BY emp.name,mc.name`);return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/local-test/redeem'){
  const b=await read(req);
