@@ -79,7 +79,7 @@ function App(){
  function exportCsv(){
   const rows=[['Tarih','Firma','Lokanta','İşlem','Tutar (TL)','İşlem ID'],...visibleMovements.map(m=>[new Date(m.created_at).toLocaleString('tr-TR'),m.company_name,m.restaurant_name,movementNames[m.entry_type]||m.entry_type,(Number(m.amount_kurus)/100).toFixed(2).replace('.',','),m.id])];
   const escapeCsv=(v:string)=>'"'+v.replace(/"/g,'""')+'"';
-  const csv='\\uFEFF'+rows.map(r=>r.map(escapeCsv).join(';')).join('\\r\\n');
+  const csv='\uFEFF'+rows.map(r=>r.map(escapeCsv).join(';')).join('\r\n');
   const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
   const link=document.createElement('a');link.href=url;link.download='YemekPASS_Cari_Hareketler.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
  }
