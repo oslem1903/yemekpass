@@ -1,2 +1,12 @@
 *{box-sizing:border-box}body{margin:0;font:15px system-ui,Arial;background:#f5f7fa;color:#162c32}.layout{display:flex;min-height:100vh}aside{width:238px;background:#103d42;color:white;padding:26px 16px;flex-shrink:0}aside h2{margin:0 0 8px}aside p{color:#aacbd0;margin-bottom:35px}aside button{width:100%;display:block;text-align:left;background:none;color:#d9ecee;border:0;padding:13px;border-radius:9px;cursor:pointer;font:inherit}.active,aside button:hover{background:#236269}main{flex:1;padding:28px 38px;min-width:0}header{display:flex;justify-content:space-between;color:#547078;border-bottom:1px solid #dce5e9;padding-bottom:20px}h1{font-size:30px;margin:32px 0 4px}.muted{color:#69818a;margin:0 0 26px}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}article{background:white;border:1px solid #e1e8eb;border-radius:13px;padding:23px;margin-bottom:24px;overflow:auto}article small{color:#718891}article h2{margin:13px 0 0;font-size:25px}main>h2{margin-top:30px}table{width:100%;border-collapse:collapse;text-align:left}td,th{padding:14px;border-bottom:1px solid #edf1f3}th{color:#647c83;font-weight:600}@media(max-width:800px){.layout{display:block}aside{width:100%;padding:16px}aside p{margin:5px 0}aside button{display:inline-block;width:auto;padding:9px}main{padding:18px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}table{min-width:550px}}
 .meal-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;align-items:end}form label{display:inline-flex;flex-direction:column;gap:7px;font-weight:600;color:#35545b}form input,form select{font:inherit;padding:11px 12px;border:1px solid #b9cbd0;border-radius:8px;min-width:0;max-width:100%;background:#fff}form button,article>button{background:#236269;color:white;border:0;border-radius:8px;padding:12px 18px;cursor:pointer;font:inherit}form button:disabled{opacity:.5;cursor:not-allowed}article[role=alert]{border-color:#d98c8c;color:#9d3030} 
+
+@media print {
+ aside, header, form, button, .muted {display:none!important}
+ .layout {display:block!important}
+ main {width:100%!important;max-width:none!important;margin:0!important;padding:0!important}
+ main>article:not(.ledger-print),main>h1 {display:none!important}
+ .ledger-print {display:block!important;box-shadow:none!important;border:0!important;padding:0!important}
+ .ledger-print table {width:100%;font-size:10pt}
+ .ledger-print tr {break-inside:avoid}
+}
