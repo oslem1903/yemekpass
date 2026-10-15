@@ -88,6 +88,19 @@ if(req.method==='POST'&&path==='/api/ledger/payments'){
   return send(res,201,{ok:true,repeated:false,payment:inserted.rows[0]});
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }
+if(req.method==='GET'&&path==='/api/ledger/movements'){
+ const u=new URL(req.url,'http://127.0.0.1');
+ const agreementId=u.searchParams.get('agreement_id');
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ if(agreementId&&!uuid.test(agreementId))return send(res,400,{error:'Geçersiz anlaşma'});
+ const r=await pool.query(`SELECT l.id,l.agreement_id,l.entry_type,l.amount_kurus::text AS amount_kurus,l.created_at,
+ c.name AS company_name,rest.name AS restaurant_name
+ FROM ledger_entries l JOIN agreements a ON a.id=l.agreement_id
+ JOIN companies c ON c.id=a.company_id JOIN restaurants rest ON rest.id=a.restaurant_id
+ WHERE ($1::uuid IS NULL OR l.agreement_id=$1::uuid)
+ ORDER BY l.created_at DESC,l.id DESC LIMIT 1000`,[agreementId||null]);
+ return send(res,200,{rows:r.rows,limit:1000});
+}
 if(req.method==='GET'&&path==='/api/ledger/summary'){
  const r=await pool.query(`SELECT a.id AS agreement_id,c.name AS company_name,rest.name AS restaurant_name,a.payment_model,
  COALESCE(SUM(CASE WHEN l.entry_type='advance' THEN l.amount_kurus ELSE 0 END),0)::text AS advances_kurus,
