@@ -3,7 +3,7 @@ import {Pool} from 'pg';
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
-const env=readFileSync(resolve(process.cwd(),'.env'),'utf8');
+const env=readFileSync(resolve(process.cwd(),'..','.env'),'utf8');
 const password=env.match(/^POSTGRES_PASSWORD=(.+)$/m)?.[1]?.trim();
 if(!password)throw Error('Missing POSTGRES_PASSWORD in root .env');
 const pool=new Pool({host:'127.0.0.1',port:5439,database:'yemekpass',user:'yemekpass',password});
