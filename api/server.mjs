@@ -64,6 +64,30 @@ if(req.method==='GET'&&path==='/api/restaurants'){const r=await pool.query('sele
 if(req.method==='POST'&&path==='/api/restaurants'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Lokanta adı 2-160 karakter olmalı'});const r=await pool.query('insert into restaurants(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
 if(req.method==='GET'&&path==='/api/employees'){const r=await pool.query('select e.id,e.name,e.active,e.company_id,c.name as company_name from employees e join companies c on c.id=e.company_id order by c.name,e.name');return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/employees'){const b=await read(req);if(!validName(b.name)||typeof b.company_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.company_id))return send(res,400,{error:'Geçerli personel adı ve firma seçin'});const r=await pool.query('insert into employees(id,name,company_id) values($1,$2,$3) returning id,name,company_id,active',[randomUUID(),b.name.trim(),b.company_id]);return send(res,201,r.rows[0])}
+if(req.method==='POST'&&path==='/api/ledger/payments'){
+ const b=await read(req);
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ if(typeof b.agreement_id!=='string'||!uuid.test(b.agreement_id)||typeof b.idempotency_key!=='string'||!uuid.test(b.idempotency_key)||!['advance','collection'].includes(b.entry_type)||!Number.isSafeInteger(b.amount_kurus)||b.amount_kurus<1||b.amount_kurus>100000000000)return send(res,400,{error:'Geçerli anlaşma, işlem türü, tutar ve işlem anahtarı gerekli'});
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  const agreement=await client.query('SELECT id,payment_model,active FROM agreements WHERE id=$1 FOR UPDATE',[b.agreement_id]);
+  if(!agreement.rowCount||!agreement.rows[0].active){await client.query('ROLLBACK');return send(res,404,{error:'Aktif firma anlaşması bulunamadı'})}
+  if((agreement.rows[0].payment_model==='prepaid'&&b.entry_type!=='advance')||(agreement.rows[0].payment_model==='postpaid'&&b.entry_type!=='collection')){
+   await client.query('ROLLBACK');return send(res,409,{error:'Ödeme türü firma anlaşmasına uygun değil'});
+  }
+  const inserted=await client.query(`INSERT INTO ledger_entries(id,agreement_id,entry_type,amount_kurus)
+   VALUES($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING RETURNING id,agreement_id,entry_type,amount_kurus,created_at`,[b.idempotency_key,b.agreement_id,b.entry_type,b.amount_kurus]);
+  if(!inserted.rowCount){
+   const previous=await client.query('SELECT id,agreement_id,entry_type,amount_kurus,created_at FROM ledger_entries WHERE id=$1',[b.idempotency_key]);
+   await client.query('ROLLBACK');
+   if(!previous.rowCount||previous.rows[0].agreement_id!==b.agreement_id||previous.rows[0].entry_type!==b.entry_type||BigInt(previous.rows[0].amount_kurus)!==BigInt(b.amount_kurus))return send(res,409,{error:'İşlem anahtarı farklı bir işlemde kullanılmış'});
+   return send(res,200,{ok:true,repeated:true,payment:previous.rows[0]});
+  }
+  await client.query('COMMIT');
+  return send(res,201,{ok:true,repeated:false,payment:inserted.rows[0]});
+ }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+}
 if(req.method==='GET'&&path==='/api/ledger/summary'){
  const r=await pool.query(`SELECT a.id AS agreement_id,c.name AS company_name,rest.name AS restaurant_name,a.payment_model,
  COALESCE(SUM(CASE WHEN l.entry_type='advance' THEN l.amount_kurus ELSE 0 END),0)::text AS advances_kurus,
