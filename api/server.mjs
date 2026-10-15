@@ -20,6 +20,15 @@ if(req.method==='GET'&&path==='/api/restaurants'){const r=await pool.query('sele
 if(req.method==='POST'&&path==='/api/restaurants'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Lokanta adı 2-160 karakter olmalı'});const r=await pool.query('insert into restaurants(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
 if(req.method==='GET'&&path==='/api/employees'){const r=await pool.query('select e.id,e.name,e.active,e.company_id,c.name as company_name from employees e join companies c on c.id=e.company_id order by c.name,e.name');return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/employees'){const b=await read(req);if(!validName(b.name)||typeof b.company_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.company_id))return send(res,400,{error:'Geçerli personel adı ve firma seçin'});const r=await pool.query('insert into employees(id,name,company_id) values($1,$2,$3) returning id,name,company_id,active',[randomUUID(),b.name.trim(),b.company_id]);return send(res,201,r.rows[0])}
+if(req.method==='GET'&&path==='/api/reports/company-consumption'){
+ const r=await pool.query(`SELECT c.id AS company_id,c.name AS company_name,COUNT(r.id)::integer AS meal_count,
+ COALESCE(SUM(r.amount_kurus),0)::text AS total_kurus
+ FROM companies c LEFT JOIN employees emp ON emp.company_id=c.id
+ LEFT JOIN entitlements e ON e.employee_id=emp.id
+ LEFT JOIN redemptions r ON r.entitlement_id=e.id AND r.reversed_at IS NULL
+ GROUP BY c.id,c.name ORDER BY c.name`);
+ return send(res,200,r.rows);
+}
 if(req.method==='GET'&&path==='/api/redemptions'){
  const r=await pool.query(`SELECT r.id,r.created_at,r.amount_kurus,emp.name AS employee_name,c.name AS company_name,mc.name AS category_name,rest.name AS restaurant_name
  FROM redemptions r JOIN entitlements e ON e.id=r.entitlement_id JOIN employees emp ON emp.id=e.employee_id
