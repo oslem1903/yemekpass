@@ -12,6 +12,9 @@ async function request<T>(path:string,method='GET',body?:object):Promise<T>{
  const data=await r.json();if(!r.ok)throw Error(data.error||'Sunucu hatası');return data as T;
 }
 function App(){
+ const [authenticated,setAuthenticated]=React.useState<boolean|null>(null);
+ const [adminPassword,setAdminPassword]=React.useState('');
+ const [loginError,setLoginError]=React.useState('');
  const [tab,setTab]=React.useState('Genel Bakış');
  const [companies,setCompanies]=React.useState<Company[]>([]);
  const [employees,setEmployees]=React.useState<Employee[]>([]);
@@ -38,7 +41,12 @@ function App(){
  const [c,e,rights,history,reports,ledger]=await Promise.all([request<Company[]>('companies'),request<Employee[]>('employees'),request<Entitlement[]>('entitlements'),request<Redemption[]>('redemptions'),request<CompanyReport[]>('reports/company-consumption'),request<LedgerSummary[]>('ledger/summary')]);
  setCompanies(c);setEmployees(e);setEntitlements(rights);setRedemptions(history);setCompanyReports(reports);setLedgerSummaries(ledger);setOnline(true);setError('');
  }catch(err){setOnline(false);setError((err as Error).message)}},[]);
- React.useEffect(()=>{void refresh()},[refresh]);
+ React.useEffect(()=>{void request<{authenticated:boolean}>('session').then(r=>setAuthenticated(r.authenticated)).catch(()=>setAuthenticated(false))},[]);
+ React.useEffect(()=>{if(authenticated)void refresh()},[authenticated,refresh]);
+ async function login(ev:React.FormEvent){ev.preventDefault();setLoginError('');try{await request('login','POST',{password:adminPassword});setAdminPassword('');setAuthenticated(true)}catch(e){setLoginError((e as Error).message)}}
+ async function logout(){await request('logout','POST',{});setAuthenticated(false);setCompanies([]);setEmployees([]);setEntitlements([]);setLedgerSummaries([]);setOnline(false)}
+ if(authenticated===null)return <main><article><h2>YemekPASS</h2><p>Oturum kontrol ediliyor...</p></article></main>;
+ if(!authenticated)return <main><article><h2>YemekPASS yönetici girişi</h2><p>Yerel yönetici parolanızı girin.</p><form onSubmit={login}><label>Parola <input type="password" required value={adminPassword} onChange={e=>setAdminPassword(e.target.value)} autoComplete="current-password"/></label> <button>Giriş yap</button></form>{loginError&&<p role="alert">{loginError}</p>}</article></main>;
  async function addCompany(ev:React.FormEvent){ev.preventDefault();setBusy(true);try{
  await request('companies','POST',{name});setName('');await refresh();
  }catch(err){setError((err as Error).message)}finally{setBusy(false)}}
@@ -48,7 +56,7 @@ function App(){
  async function addMeal(ev:React.FormEvent){ev.preventDefault();const person=employees.find(e=>e.id===mealEmployee);if(!person){setError('Personel seçin');return}setBusy(true);try{await request('meal-setup','POST',{company_id:person.company_id,employee_id:person.id,category_name:mealName,granted:mealCount,price_kurus:Math.round(mealPrice*100),payment_model:mealModel,valid_from:fromDate,valid_until:untilDate});await refresh()}catch(err){setError((err as Error).message)}finally{setBusy(false)}}
  async function testRedeem(){if(!testEntitlement){setError('Yemek hakkı seçin');return}setBusy(true);setError('');setTestResult('');try{const result=await request<{remaining:number;amount_kurus:number}>('local-test/redeem','POST',{entitlement_id:testEntitlement,idempotency_key:crypto.randomUUID()});setTestResult('Tüketim kaydedildi. Kalan: '+result.remaining+' | Tutar: '+(result.amount_kurus/100).toFixed(2)+' TL');await refresh()}catch(err){setError((err as Error).message)}finally{setBusy(false)}}
  return <div className="layout"><aside><h2>🍽 YemekPASS</h2><p>Lokanta yönetimi</p>{['Genel Bakış','Firmalar','Personeller','Yemek Hakları','QR İşlemleri','Cari Hesap','Raporlar'].map(t=><button className={tab===t?'active':''} onClick={()=>setTab(t)} key={t}>{t}</button>)}</aside><main>
- <header><span>{online?'Yerel veritabanı bağlı':'Veritabanı bağlantısı yok'}</span><strong>Lokanta Paneli</strong></header>
+ <header><span>{online?'Yerel veritabanı bağlı':'Veritabanı bağlantısı yok'}</span><strong>Lokanta Paneli <button onClick={()=>void logout()}>Çıkış</button></strong></header>
  <h1>{tab}</h1><p className="muted">Kurumsal yemek hakkı ve cari yönetimi</p>
  {error&&<article role="alert"><strong>Hata: {error}</strong><p>API ve Docker'ın çalıştığını kontrol edin.</p><button onClick={()=>void refresh()}>Tekrar dene</button></article>}
  {tab==='Genel Bakış'&&<><section className="stats">{[['Kayıtlı firma',companies.length],['Kayıtlı personel',employees.length],['Bugünkü öğün','Henüz aktif değil'],['Cari hesap','Henüz aktif değil']].map(([k,v])=><article key={k}><small>{k}</small><h2>{v}</h2></article>)}</section><h2>Firmalar</h2><CompanyTable companies={companies}/></>}
