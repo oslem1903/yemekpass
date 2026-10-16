@@ -29,7 +29,8 @@ const validSession=req=>{const token=cookieValue(req);if(!token||token.length>25
 const databaseUrl=process.env.DATABASE_URL;
 if(!databaseUrl)throw Error('Missing DATABASE_URL (Supabase transaction pooler URI)');
 const pool=new Pool({connectionString:databaseUrl,ssl:{rejectUnauthorized:true},max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
-pool.on('connect',client=>{client.query('SET search_path TO yp, public').catch(console.error)});
+// Always address the isolated YemekPASS schema explicitly.
+
 const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
 const read=async(req)=>{if(req.body&&typeof req.body==='object'&&!Buffer.isBuffer(req.body))return req.body;let s='';for await(const c of req){s+=c;if(s.length>12000)throw Error('Request too large')}return JSON.parse(s||'{}')};
 const validName=v=>typeof v==='string'&&v.trim().length>=2&&v.trim().length<=160;
@@ -73,12 +74,12 @@ if(req.method==='POST'&&path==='/api/logout'){
 }
 if(!validSession(req))return send(res,401,{error:'Yönetici girişi gerekli'});
 if(req.method==='GET'&&path==='/api/health'){await pool.query('select 1');return send(res,200,{ok:true})}
-if(req.method==='GET'&&path==='/api/companies'){const r=await pool.query('select id,name from companies order by name');return send(res,200,r.rows)}
-if(req.method==='POST'&&path==='/api/companies'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Firma adı 2-160 karakter olmalı'});const r=await pool.query('insert into companies(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
-if(req.method==='GET'&&path==='/api/restaurants'){const r=await pool.query('select id,name from restaurants order by name');return send(res,200,r.rows)}
-if(req.method==='POST'&&path==='/api/restaurants'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Lokanta adı 2-160 karakter olmalı'});const r=await pool.query('insert into restaurants(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
-if(req.method==='GET'&&path==='/api/employees'){const r=await pool.query('select e.id,e.name,e.active,e.company_id,c.name as company_name from employees e join companies c on c.id=e.company_id order by c.name,e.name');return send(res,200,r.rows)}
-if(req.method==='POST'&&path==='/api/employees'){const b=await read(req);if(!validName(b.name)||typeof b.company_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.company_id))return send(res,400,{error:'Geçerli personel adı ve firma seçin'});const r=await pool.query('insert into employees(id,name,company_id) values($1,$2,$3) returning id,name,company_id,active',[randomUUID(),b.name.trim(),b.company_id]);return send(res,201,r.rows[0])}
+if(req.method==='GET'&&path==='/api/companies'){const r=await pool.query('select id,name from yp.companies order by name');return send(res,200,r.rows)}
+if(req.method==='POST'&&path==='/api/companies'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Firma adı 2-160 karakter olmalı'});const r=await pool.query('insert into yp.companies(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
+if(req.method==='GET'&&path==='/api/restaurants'){const r=await pool.query('select id,name from yp.restaurants order by name');return send(res,200,r.rows)}
+if(req.method==='POST'&&path==='/api/restaurants'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Lokanta adı 2-160 karakter olmalı'});const r=await pool.query('insert into yp.restaurants(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
+if(req.method==='GET'&&path==='/api/employees'){const r=await pool.query('select e.id,e.name,e.active,e.company_id,c.name as company_name from yp.employees e join yp.companies c on c.id=e.company_id order by c.name,e.name');return send(res,200,r.rows)}
+if(req.method==='POST'&&path==='/api/employees'){const b=await read(req);if(!validName(b.name)||typeof b.company_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.company_id))return send(res,400,{error:'Geçerli personel adı ve firma seçin'});const r=await pool.query('insert into yp.employees(id,name,company_id) values($1,$2,$3) returning id,name,company_id,active',[randomUUID(),b.name.trim(),b.company_id]);return send(res,201,r.rows[0])}
 if(req.method==='POST'&&path==='/api/ledger/payments'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -86,15 +87,15 @@ if(req.method==='POST'&&path==='/api/ledger/payments'){
  const client=await pool.connect();
  try{
   await client.query('BEGIN');
-  const agreement=await client.query('SELECT id,payment_model,active FROM agreements WHERE id=$1 FOR UPDATE',[b.agreement_id]);
+  const agreement=await client.query('SELECT id,payment_model,active FROM yp.agreements WHERE id=$1 FOR UPDATE',[b.agreement_id]);
   if(!agreement.rowCount||!agreement.rows[0].active){await client.query('ROLLBACK');return send(res,404,{error:'Aktif firma anlaşması bulunamadı'})}
   if((agreement.rows[0].payment_model==='prepaid'&&b.entry_type!=='advance')||(agreement.rows[0].payment_model==='postpaid'&&b.entry_type!=='collection')){
    await client.query('ROLLBACK');return send(res,409,{error:'Ödeme türü firma anlaşmasına uygun değil'});
   }
-  const inserted=await client.query(`INSERT INTO ledger_entries(id,agreement_id,entry_type,amount_kurus)
+  const inserted=await client.query(`INSERT INTO yp.ledger_entries(id,agreement_id,entry_type,amount_kurus)
    VALUES($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING RETURNING id,agreement_id,entry_type,amount_kurus,created_at`,[b.idempotency_key,b.agreement_id,b.entry_type,b.amount_kurus]);
   if(!inserted.rowCount){
-   const previous=await client.query('SELECT id,agreement_id,entry_type,amount_kurus,created_at FROM ledger_entries WHERE id=$1',[b.idempotency_key]);
+   const previous=await client.query('SELECT id,agreement_id,entry_type,amount_kurus,created_at FROM yp.ledger_entries WHERE id=$1',[b.idempotency_key]);
    await client.query('ROLLBACK');
    if(!previous.rowCount||previous.rows[0].agreement_id!==b.agreement_id||previous.rows[0].entry_type!==b.entry_type||BigInt(previous.rows[0].amount_kurus)!==BigInt(b.amount_kurus))return send(res,409,{error:'İşlem anahtarı farklı bir işlemde kullanılmış'});
    return send(res,200,{ok:true,repeated:true,payment:previous.rows[0]});
@@ -110,8 +111,8 @@ if(req.method==='GET'&&path==='/api/ledger/movements'){
  if(agreementId&&!uuid.test(agreementId))return send(res,400,{error:'Geçersiz anlaşma'});
  const r=await pool.query(`SELECT l.id,l.agreement_id,l.entry_type,l.amount_kurus::text AS amount_kurus,l.created_at,
  c.name AS company_name,rest.name AS restaurant_name
- FROM ledger_entries l JOIN agreements a ON a.id=l.agreement_id
- JOIN companies c ON c.id=a.company_id JOIN restaurants rest ON rest.id=a.restaurant_id
+ FROM yp.ledger_entries l JOIN yp.agreements a ON a.id=l.agreement_id
+ JOIN yp.companies c ON c.id=a.company_id JOIN yp.restaurants rest ON rest.id=a.restaurant_id
  WHERE ($1::uuid IS NULL OR l.agreement_id=$1::uuid)
  ORDER BY l.created_at DESC,l.id DESC LIMIT 1000`,[agreementId||null]);
  return send(res,200,{rows:r.rows,limit:1000});
@@ -123,33 +124,33 @@ if(req.method==='GET'&&path==='/api/ledger/summary'){
  COALESCE(SUM(CASE WHEN l.entry_type='collection' THEN l.amount_kurus ELSE 0 END),0)::text AS collections_kurus,
  COALESCE(SUM(CASE WHEN l.entry_type='reversal' THEN l.amount_kurus ELSE 0 END),0)::text AS reversals_kurus,
  COALESCE(SUM(CASE WHEN l.entry_type='allocation' THEN l.amount_kurus ELSE 0 END),0)::text AS allocations_kurus
- FROM agreements a JOIN companies c ON c.id=a.company_id JOIN restaurants rest ON rest.id=a.restaurant_id
- LEFT JOIN ledger_entries l ON l.agreement_id=a.id
+ FROM yp.agreements a JOIN yp.companies c ON c.id=a.company_id JOIN yp.restaurants rest ON rest.id=a.restaurant_id
+ LEFT JOIN yp.ledger_entries l ON l.agreement_id=a.id
  GROUP BY a.id,c.name,rest.name,a.payment_model ORDER BY c.name,rest.name`);
  return send(res,200,r.rows);
 }
 if(req.method==='GET'&&path==='/api/reports/company-consumption'){
  const r=await pool.query(`SELECT c.id AS company_id,c.name AS company_name,COUNT(r.id)::integer AS meal_count,
  COALESCE(SUM(r.amount_kurus),0)::text AS total_kurus
- FROM companies c LEFT JOIN employees emp ON emp.company_id=c.id
- LEFT JOIN entitlements e ON e.employee_id=emp.id
- LEFT JOIN redemptions r ON r.entitlement_id=e.id AND r.reversed_at IS NULL
+ FROM yp.companies c LEFT JOIN yp.employees emp ON emp.company_id=c.id
+ LEFT JOIN yp.entitlements e ON e.employee_id=emp.id
+ LEFT JOIN yp.redemptions r ON r.entitlement_id=e.id AND r.reversed_at IS NULL
  GROUP BY c.id,c.name ORDER BY c.name`);
  return send(res,200,r.rows);
 }
 if(req.method==='GET'&&path==='/api/redemptions'){
  const r=await pool.query(`SELECT r.id,r.created_at,r.amount_kurus,emp.name AS employee_name,c.name AS company_name,mc.name AS category_name,rest.name AS restaurant_name
- FROM redemptions r JOIN entitlements e ON e.id=r.entitlement_id JOIN employees emp ON emp.id=e.employee_id
- JOIN companies c ON c.id=emp.company_id JOIN meal_categories mc ON mc.id=e.category_id
- JOIN restaurants rest ON rest.id=r.restaurant_id ORDER BY r.created_at DESC,r.id DESC LIMIT 100`);
+ FROM yp.redemptions r JOIN yp.entitlements e ON e.id=r.entitlement_id JOIN yp.employees emp ON emp.id=e.employee_id
+ JOIN yp.companies c ON c.id=emp.company_id JOIN yp.meal_categories mc ON mc.id=e.category_id
+ JOIN yp.restaurants rest ON rest.id=r.restaurant_id ORDER BY r.created_at DESC,r.id DESC LIMIT 100`);
  return send(res,200,r.rows);
 }
-if(req.method==='GET'&&path==='/api/entitlements'){const r=await pool.query(`SELECT e.id,e.employee_id,e.category_id,e.granted,e.used,e.valid_from,e.valid_until,emp.name AS employee_name,mc.name AS category_name,c.name AS company_name FROM entitlements e JOIN employees emp ON emp.id=e.employee_id JOIN companies c ON c.id=emp.company_id JOIN meal_categories mc ON mc.id=e.category_id ORDER BY emp.name,mc.name`);return send(res,200,r.rows)}
+if(req.method==='GET'&&path==='/api/entitlements'){const r=await pool.query(`SELECT e.id,e.employee_id,e.category_id,e.granted,e.used,e.valid_from,e.valid_until,emp.name AS employee_name,mc.name AS category_name,c.name AS company_name FROM yp.entitlements e JOIN yp.employees emp ON emp.id=e.employee_id JOIN yp.companies c ON c.id=emp.company_id JOIN yp.meal_categories mc ON mc.id=e.category_id ORDER BY emp.name,mc.name`);return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/qr/token'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
  if(!uuid.test(b.entitlement_id))return send(res,400,{error:'Geçerli yemek hakkı seçin'});
- const found=await pool.query('SELECT id FROM entitlements WHERE id=$1',[b.entitlement_id]);
+ const found=await pool.query('SELECT id FROM yp.entitlements WHERE id=$1',[b.entitlement_id]);
  if(!found.rowCount)return send(res,404,{error:'Yemek hakkı bulunamadı'});
  const exp=Date.now()+60000;
  const payload=Buffer.from(JSON.stringify({entitlement_id:b.entitlement_id,exp,nonce:randomUUID()})).toString('base64url');
@@ -163,15 +164,15 @@ if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem
  const client=await pool.connect();
  try{
   await client.query('BEGIN');
-  const previous=await client.query('SELECT id,entitlement_id,amount_kurus FROM redemptions WHERE idempotency_key=$1',[b.idempotency_key]);
+  const previous=await client.query('SELECT id,entitlement_id,amount_kurus FROM yp.redemptions WHERE idempotency_key=$1',[b.idempotency_key]);
   if(previous.rowCount){
    await client.query('ROLLBACK');
    if(previous.rows[0].entitlement_id!==b.entitlement_id)return send(res,409,{error:'İşlem anahtarı başka hak için kullanılmış'});
    return send(res,200,{ok:true,repeated:true,redemption_id:previous.rows[0].id});
   }
   const r=await client.query(`SELECT e.id,e.granted,e.used,e.valid_from,e.valid_until,mc.price_kurus,a.id AS agreement_id,a.payment_model,a.restaurant_id,emp.active
-  FROM entitlements e JOIN employees emp ON emp.id=e.employee_id JOIN meal_categories mc ON mc.id=e.category_id
-  JOIN agreements a ON a.id=mc.agreement_id AND a.company_id=emp.company_id
+  FROM yp.entitlements e JOIN yp.employees emp ON emp.id=e.employee_id JOIN yp.meal_categories mc ON mc.id=e.category_id
+  JOIN yp.agreements a ON a.id=mc.agreement_id AND a.company_id=emp.company_id
   WHERE e.id=$1 AND a.active=true FOR UPDATE OF e`,[b.entitlement_id]);
   if(!r.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'Aktif yemek hakkı bulunamadı'})}
   const x=r.rows[0];
@@ -181,13 +182,13 @@ if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem
    await client.query('ROLLBACK');return send(res,409,{error:'Kullanılabilir yemek hakkı yok veya tarih geçersiz'});
   }
   if(x.payment_model==='prepaid'){
-   const balance=await client.query(`SELECT COALESCE(SUM(CASE WHEN entry_type='advance' THEN amount_kurus WHEN entry_type='consumption' THEN -amount_kurus ELSE 0 END),0)::bigint AS balance FROM ledger_entries WHERE agreement_id=$1`,[x.agreement_id]);
+   const balance=await client.query(`SELECT COALESCE(SUM(CASE WHEN entry_type='advance' THEN amount_kurus WHEN entry_type='consumption' THEN -amount_kurus ELSE 0 END),0)::bigint AS balance FROM yp.ledger_entries WHERE agreement_id=$1`,[x.agreement_id]);
    if(BigInt(balance.rows[0].balance)<BigInt(x.price_kurus)){await client.query('ROLLBACK');return send(res,409,{error:'Firma avansı yetersiz'})}
   }
   const redemptionId=randomUUID();
-  await client.query('UPDATE entitlements SET used=used+1 WHERE id=$1',[x.id]);
-  await client.query('INSERT INTO redemptions(id,entitlement_id,restaurant_id,amount_kurus,idempotency_key) VALUES($1,$2,$3,$4,$5)',[redemptionId,x.id,x.restaurant_id,x.price_kurus,b.idempotency_key]);
-  if(BigInt(x.price_kurus)>0)await client.query("INSERT INTO ledger_entries(agreement_id,redemption_id,entry_type,amount_kurus) VALUES($1,$2,'consumption',$3)",[x.agreement_id,redemptionId,x.price_kurus]);
+  await client.query('UPDATE yp.entitlements SET used=used+1 WHERE id=$1',[x.id]);
+  await client.query('INSERT INTO yp.redemptions(id,entitlement_id,restaurant_id,amount_kurus,idempotency_key) VALUES($1,$2,$3,$4,$5)',[redemptionId,x.id,x.restaurant_id,x.price_kurus,b.idempotency_key]);
+  if(BigInt(x.price_kurus)>0)await client.query("INSERT INTO yp.ledger_entries(agreement_id,redemption_id,entry_type,amount_kurus) VALUES($1,$2,'consumption',$3)",[x.agreement_id,redemptionId,x.price_kurus]);
   await client.query('COMMIT');
   return send(res,201,{ok:true,redemption_id:redemptionId,remaining:x.granted-x.used-1,amount_kurus:Number(x.price_kurus)});
  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return send(res,409,{error:'Bu işlem zaten işlendi'});throw e}finally{client.release()}
@@ -198,21 +199,21 @@ if(req.method==='POST'&&path==='/api/meal-setup'){
  if(!uuid.test(b.company_id)||!uuid.test(b.employee_id)||!validName(b.category_name)||!['prepaid','postpaid'].includes(b.payment_model)||!Number.isSafeInteger(b.price_kurus)||b.price_kurus<0||!Number.isSafeInteger(b.granted)||b.granted<1||b.granted>1000||!/^\\d{4}-\\d{2}-\\d{2}$/.test(b.valid_from)||!/^\\d{4}-\\d{2}-\\d{2}$/.test(b.valid_until)||b.valid_until<b.valid_from)return send(res,400,{error:'Geçerli firma, personel, yemek, fiyat, adet ve tarih girin'});
  const client=await pool.connect();
  try{await client.query('BEGIN');
- const belongs=await client.query('SELECT id FROM employees WHERE id=$1 AND company_id=$2 AND active=true',[b.employee_id,b.company_id]);
+ const belongs=await client.query('SELECT id FROM yp.employees WHERE id=$1 AND company_id=$2 AND active=true',[b.employee_id,b.company_id]);
  if(!belongs.rowCount){await client.query('ROLLBACK');return send(res,400,{error:'Personel seçilen firmaya ait değil'})}
- let restaurant=await client.query('SELECT id FROM restaurants ORDER BY created_at LIMIT 1');
- if(!restaurant.rowCount)restaurant=await client.query("INSERT INTO restaurants(name) VALUES('Yerel Test Lokantası') RETURNING id");
+ let restaurant=await client.query('SELECT id FROM yp.restaurants ORDER BY created_at LIMIT 1');
+ if(!restaurant.rowCount)restaurant=await client.query("INSERT INTO yp.restaurants(name) VALUES('Yerel Test Lokantası') RETURNING id");
  const rid=restaurant.rows[0].id;
- let agreement=await client.query('SELECT id,payment_model FROM agreements WHERE restaurant_id=$1 AND company_id=$2 FOR UPDATE',[rid,b.company_id]);
- if(!agreement.rowCount)agreement=await client.query('INSERT INTO agreements(restaurant_id,company_id,payment_model) VALUES($1,$2,$3) RETURNING id,payment_model',[rid,b.company_id,b.payment_model]);
+ let agreement=await client.query('SELECT id,payment_model FROM yp.agreements WHERE restaurant_id=$1 AND company_id=$2 FOR UPDATE',[rid,b.company_id]);
+ if(!agreement.rowCount)agreement=await client.query('INSERT INTO yp.agreements(restaurant_id,company_id,payment_model) VALUES($1,$2,$3) RETURNING id,payment_model',[rid,b.company_id,b.payment_model]);
  if(agreement.rows[0].payment_model!==b.payment_model){await client.query('ROLLBACK');return send(res,409,{error:'Firmanın mevcut ödeme modeli farklı; önce anlaşma düzenleme akışı gerekli'})}
  const aid=agreement.rows[0].id;
- let category=await client.query('SELECT id,price_kurus FROM meal_categories WHERE agreement_id=$1 AND name=$2',[aid,b.category_name.trim()]);
- if(!category.rowCount)category=await client.query('INSERT INTO meal_categories(agreement_id,name,price_kurus) VALUES($1,$2,$3) RETURNING id,price_kurus',[aid,b.category_name.trim(),b.price_kurus]);
+ let category=await client.query('SELECT id,price_kurus FROM yp.meal_categories WHERE agreement_id=$1 AND name=$2',[aid,b.category_name.trim()]);
+ if(!category.rowCount)category=await client.query('INSERT INTO yp.meal_categories(agreement_id,name,price_kurus) VALUES($1,$2,$3) RETURNING id,price_kurus',[aid,b.category_name.trim(),b.price_kurus]);
  if(Number(category.rows[0].price_kurus)!==b.price_kurus){await client.query('ROLLBACK');return send(res,409,{error:'Bu yemek türü farklı fiyatla kayıtlı'})}
- const exists=await client.query('SELECT id FROM entitlements WHERE employee_id=$1 AND category_id=$2 AND valid_from=$3 AND valid_until=$4',[b.employee_id,category.rows[0].id,b.valid_from,b.valid_until]);
+ const exists=await client.query('SELECT id FROM yp.entitlements WHERE employee_id=$1 AND category_id=$2 AND valid_from=$3 AND valid_until=$4',[b.employee_id,category.rows[0].id,b.valid_from,b.valid_until]);
  if(exists.rowCount){await client.query('ROLLBACK');return send(res,409,{error:'Aynı personel, yemek türü ve tarih için hak zaten tanımlanmış'})}
- const result=await client.query('INSERT INTO entitlements(employee_id,category_id,valid_from,valid_until,granted) VALUES($1,$2,$3,$4,$5) RETURNING id,granted,used',[b.employee_id,category.rows[0].id,b.valid_from,b.valid_until,b.granted]);
+ const result=await client.query('INSERT INTO yp.entitlements(employee_id,category_id,valid_from,valid_until,granted) VALUES($1,$2,$3,$4,$5) RETURNING id,granted,used',[b.employee_id,category.rows[0].id,b.valid_from,b.valid_until,b.granted]);
  await client.query('COMMIT');return send(res,201,result.rows[0]);
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }
