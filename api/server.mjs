@@ -198,7 +198,7 @@ if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem
   if(usedToday.rows[0].total>=rule.daily_limit){
    await client.query('ROLLBACK');return send(res,409,{error:'Günlük yemek kullanım limitine ulaşıldı'});
   }
-  const today=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Istanbul'});
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const dateOnly=v=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
   if(!x.active||x.used>=x.granted||today<dateOnly(x.valid_from)||today>dateOnly(x.valid_until)){
    await client.query('ROLLBACK');return send(res,409,{error:'Kullanılabilir yemek hakkı yok veya tarih geçersiz'});
@@ -230,7 +230,8 @@ if(req.method==='POST'&&path==='/api/redemptions/reverse'){
   const x=row.rows[0];
   if(x.reversed_at){await client.query('ROLLBACK');return send(res,409,{error:'Bu tüketim zaten iptal edilmiş'})}
   await client.query('UPDATE yp.redemptions SET reversed_at=now() WHERE id=$1',[x.id]);
-  await client.query('UPDATE yp.entitlements SET used=used-1 WHERE id=$1 AND used>0',[x.entitlement_id]);
+  const decremented=await client.query('UPDATE yp.entitlements SET used=used-1 WHERE id=$1 AND used>0 RETURNING id',[x.entitlement_id]);
+  if(!decremented.rowCount)throw Error('Entitlement count inconsistent during reversal');
   await client.query('INSERT INTO yp.reversal_audit(redemption_id,reason,reversed_by) VALUES($1,$2,$3)',[x.id,b.reason.trim(),'admin']);
   if(BigInt(x.amount_kurus)>0)await client.query("INSERT INTO yp.ledger_entries(agreement_id,redemption_id,entry_type,amount_kurus) VALUES($1,$2,'reversal',$3)",[x.agreement_id,x.id,x.amount_kurus]);
   await client.query('COMMIT');return send(res,200,{ok:true,reversed:true});
