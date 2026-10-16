@@ -32,7 +32,7 @@ const dbUrl=new URL(databaseUrl);
 const dbCa=process.env.SUPABASE_DB_CA_CERT?.replace(/\\n/g,'\n');
 const sslParams=['sslmode','sslrootcert','sslcert','sslkey'];
 for(const param of sslParams)dbUrl.searchParams.delete(param);
-const pool=new Pool({connectionString:dbUrl.toString(),ssl:{rejectUnauthorized:true,...(dbCa?{ca:dbCa}:{})},max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
+const pool=new Pool({host:dbUrl.hostname,port:Number(dbUrl.port||5432),user:decodeURIComponent(dbUrl.username),password:decodeURIComponent(dbUrl.password),database:decodeURIComponent(dbUrl.pathname.slice(1)),ssl:{rejectUnauthorized:true,...(dbCa?{ca:dbCa}:{})},max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
 // Always address the isolated YemekPASS schema explicitly.
 
 const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
