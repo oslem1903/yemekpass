@@ -121,6 +121,24 @@ if(req.method==='GET'&&path==='/api/ledger/movements'){
  ORDER BY l.created_at DESC,l.id DESC LIMIT 1000`,[agreementId||null]);
  return send(res,200,{rows:r.rows,limit:1000});
 }
+if(req.method==='GET'&&path==='/api/ledger/reconciliation'){
+ const r=await pool.query(`SELECT a.id AS agreement_id,c.name AS company_name,rest.name AS restaurant_name,a.payment_model,
+ COALESCE(SUM(CASE WHEN l.entry_type='advance' THEN l.amount_kurus ELSE 0 END),0)::text AS advances_kurus,
+ COALESCE(SUM(CASE WHEN l.entry_type='consumption' THEN l.amount_kurus ELSE 0 END),0)::text AS consumption_kurus,
+ COALESCE(SUM(CASE WHEN l.entry_type='collection' THEN l.amount_kurus ELSE 0 END),0)::text AS collections_kurus,
+ COALESCE(SUM(CASE WHEN l.entry_type='reversal' THEN l.amount_kurus ELSE 0 END),0)::text AS reversals_kurus,
+ COALESCE(SUM(CASE WHEN l.entry_type='allocation' THEN l.amount_kurus ELSE 0 END),0)::text AS allocations_kurus,
+ (CASE WHEN a.payment_model='prepaid' THEN
+ COALESCE(SUM(CASE WHEN l.entry_type='advance' THEN l.amount_kurus WHEN l.entry_type='consumption' THEN -l.amount_kurus WHEN l.entry_type='reversal' THEN l.amount_kurus ELSE 0 END),0)
+ ELSE
+ COALESCE(SUM(CASE WHEN l.entry_type='consumption' THEN l.amount_kurus WHEN l.entry_type='reversal' THEN -l.amount_kurus WHEN l.entry_type='collection' THEN -l.amount_kurus ELSE 0 END),0)
+ END)::text AS balance_kurus,
+ (COUNT(l.id) FILTER (WHERE l.entry_type='allocation')>0) AS needs_allocation_review
+ FROM yp.agreements a JOIN yp.companies c ON c.id=a.company_id JOIN yp.restaurants rest ON rest.id=a.restaurant_id
+ LEFT JOIN yp.ledger_entries l ON l.agreement_id=a.id
+ GROUP BY a.id,c.name,rest.name,a.payment_model ORDER BY c.name,rest.name`);
+ return send(res,200,{rows:r.rows,balanceMeaning:{prepaid:'available_credit',postpaid:'amount_due'},allocationWarning:'Balances exclude allocation entries; review flagged agreements'});
+}
 if(req.method==='GET'&&path==='/api/ledger/summary'){
  const r=await pool.query(`SELECT a.id AS agreement_id,c.name AS company_name,rest.name AS restaurant_name,a.payment_model,
  COALESCE(SUM(CASE WHEN l.entry_type='advance' THEN l.amount_kurus ELSE 0 END),0)::text AS advances_kurus,
