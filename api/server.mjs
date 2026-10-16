@@ -28,7 +28,11 @@ const signSession=payload=>createHmac('sha256',sessionSecret).update(payload).di
 const validSession=req=>{const token=cookieValue(req);if(!token||token.length>256)return false;const parts=token.split('.');if(parts.length!==2)return false;const [payload,signature]=parts;const expected=signSession(payload);if(signature.length!==expected.length||!timingSafeEqual(Buffer.from(signature),Buffer.from(expected)))return false;try{const value=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));return Number.isSafeInteger(value.exp)&&value.exp>Date.now()&&value.exp<=Date.now()+sessionDurationMs}catch{return false}};
 const databaseUrl=process.env.DATABASE_URL;
 if(!databaseUrl)throw Error('Missing DATABASE_URL (Supabase transaction pooler URI)');
-const pool=new Pool({connectionString:databaseUrl,ssl:{rejectUnauthorized:true},max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
+const dbUrl=new URL(databaseUrl);
+const dbCa=process.env.SUPABASE_DB_CA_CERT?.replace(/\\n/g,'\n');
+const sslParams=['sslmode','sslrootcert','sslcert','sslkey'];
+for(const param of sslParams)dbUrl.searchParams.delete(param);
+const pool=new Pool({connectionString:dbUrl.toString(),ssl:{rejectUnauthorized:true,...(dbCa?{ca:dbCa}:{})},max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
 // Always address the isolated YemekPASS schema explicitly.
 
 const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
