@@ -119,6 +119,25 @@ if(req.method==='POST'&&path==='/api/qr/redeem'&&!validSession(req)){
  if(!restaurantPortal||restaurantPortal.role!=='restaurant')return send(res,403,{error:'Yetkili lokanta erişimi gerekli'});
 }
 if(!validSession(req)&&!restaurantPortal)return send(res,401,{error:'Yönetici girişi gerekli'});
+if(req.method==='GET'&&path==='/api/portal/accounts'){
+ const r=await pool.query('SELECT id,role,company_id,restaurant_id,employee_id,active,created_at FROM yp.portal_accounts ORDER BY created_at DESC LIMIT 500');
+ return send(res,200,r.rows);
+}
+if(req.method==='POST'&&path==='/api/portal/revoke'){
+ const b=await read(req);
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.account_id))return send(res,400,{error:'Geçerli hesap gerekli'});
+ const r=await pool.query('UPDATE yp.portal_accounts SET active=false WHERE id=$1 RETURNING id',[b.account_id]);
+ return send(res,r.rowCount?200:404,r.rowCount?{ok:true}:{error:'Hesap bulunamadı'});
+}
+if(req.method==='POST'&&path==='/api/meal-policies'){
+ const b=await read(req);
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ const time=/^(?:[01]\\d|2[0-3]):[0-5]\\d$/;
+ if(!uuid.test(b.agreement_id)||!Number.isInteger(b.daily_limit)||b.daily_limit<1||b.daily_limit>10||!time.test(b.start_time)||!time.test(b.end_time)||b.start_time>=b.end_time||!Array.isArray(b.weekdays)||!b.weekdays.length||b.weekdays.some(x=>!Number.isInteger(x)||x<1||x>7))return send(res,400,{error:'Geçerli günlük limit, saat ve gün seçimi gerekli'});
+ const r=await pool.query(`INSERT INTO yp.meal_policies(agreement_id,daily_limit,start_time,end_time,weekdays)
+ VALUES($1,$2,$3,$4,$5::integer[]) ON CONFLICT(agreement_id) DO UPDATE SET daily_limit=EXCLUDED.daily_limit,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,weekdays=EXCLUDED.weekdays RETURNING agreement_id,daily_limit,start_time::text,end_time::text,weekdays`,[b.agreement_id,b.daily_limit,b.start_time,b.end_time,[...new Set(b.weekdays)]]);
+ return send(res,200,r.rows[0]);
+}
 if(req.method==='POST'&&path==='/api/portal/accounts'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
