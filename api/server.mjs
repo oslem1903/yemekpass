@@ -30,7 +30,7 @@ const databaseUrl=process.env.DATABASE_URL;
 if(!databaseUrl)throw Error('Missing DATABASE_URL (Supabase transaction pooler URI)');
 const pool=new Pool({connectionString:databaseUrl,ssl:{rejectUnauthorized:true},options:'-c search_path=yp,public',max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
 const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
-const read=async(req)=>{let s='';for await(const c of req){s+=c;if(s.length>12000)throw Error('Request too large')}return JSON.parse(s||'{}')};
+const read=async(req)=>{if(req.body&&typeof req.body==='object'&&!Buffer.isBuffer(req.body))return req.body;let s='';for await(const c of req){s+=c;if(s.length>12000)throw Error('Request too large')}return JSON.parse(s||'{}')};
 const validName=v=>typeof v==='string'&&v.trim().length>=2&&v.trim().length<=160;
 export default async function handler(req,res){
 try{
@@ -63,7 +63,7 @@ if(req.method==='POST'&&path==='/api/login'){
  loginFailures.delete(key);
  const payload=Buffer.from(JSON.stringify({exp:Date.now()+sessionDurationMs,nonce:randomUUID()})).toString('base64url');
  const token=payload+'.'+signSession(payload);
- res.setHeader('Set-Cookie',cookieName+'='+token+'; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=28800');
+ res.setHeader('Set-Cookie',cookieName+'='+token+'; HttpOnly; '+(req.headers.host?.startsWith('localhost')||req.headers.host?.startsWith('127.0.0.1')?'':'Secure; ')+'SameSite=Strict; Path=/api; Max-Age=28800');
  return send(res,200,{authenticated:true});
 }
 if(req.method==='POST'&&path==='/api/logout'){
