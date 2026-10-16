@@ -76,7 +76,58 @@ if(req.method==='POST'&&path==='/api/logout'){
  res.setHeader('Set-Cookie',cookieName+'=; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=0');
  return send(res,200,{authenticated:false});
 }
+// Scoped portal credentials are random, stored only as HMAC hashes, and never expose admin APIs.
+const portalAuth=async()=>{
+ const auth=req.headers.authorization||'';
+ if(!auth.startsWith('Bearer '))return null;
+ const token=auth.slice(7);
+ if(!/^[0-9a-f]{64}$/i.test(token))return null;
+ const hash=createHmac('sha256',sessionSecret).update(token).digest('hex');
+ const account=await pool.query('SELECT role,company_id,restaurant_id,employee_id FROM yp.portal_accounts WHERE token_hash=$1 AND active=true',[hash]);
+ return account.rows[0]||null;
+};
+if(req.method==='GET'&&path==='/api/portal/me'){
+ const a=await portalAuth();if(!a)return send(res,401,{error:'Portal erişimi geçersiz'});
+ return send(res,200,{role:a.role,company_id:a.company_id,restaurant_id:a.restaurant_id,employee_id:a.employee_id});
+}
+if(req.method==='GET'&&path==='/api/portal/overview'){
+ const a=await portalAuth();if(!a)return send(res,401,{error:'Portal erişimi geçersiz'});
+ if(a.role==='company'){
+  const employees=await pool.query('SELECT id,name,active FROM yp.employees WHERE company_id=$1 ORDER BY name',[a.company_id]);
+  const agreements=await pool.query('SELECT a.id,r.name AS restaurant_name,a.payment_model FROM yp.agreements a JOIN yp.restaurants r ON r.id=a.restaurant_id WHERE a.company_id=$1',[a.company_id]);
+  return send(res,200,{role:a.role,employees:employees.rows,agreements:agreements.rows});
+ }
+ if(a.role==='restaurant'){
+  const sales=await pool.query('SELECT r.id,r.created_at,r.amount_kurus,c.name AS company_name FROM yp.redemptions r JOIN yp.entitlements e ON e.id=r.entitlement_id JOIN yp.employees emp ON emp.id=e.employee_id JOIN yp.companies c ON c.id=emp.company_id WHERE r.restaurant_id=$1 AND r.reversed_at IS NULL ORDER BY r.created_at DESC LIMIT 100',[a.restaurant_id]);
+  return send(res,200,{role:a.role,sales:sales.rows});
+ }
+ const entitlements=await pool.query('SELECT e.id,e.granted,e.used,e.valid_from,e.valid_until,mc.name AS meal_name FROM yp.entitlements e JOIN yp.meal_categories mc ON mc.id=e.category_id WHERE e.employee_id=$1 ORDER BY e.valid_until DESC',[a.employee_id]);
+ return send(res,200,{role:a.role,entitlements:entitlements.rows});
+}
+if(req.method==='POST'&&path==='/api/portal/employee-qr'){
+ const a=await portalAuth();if(!a||a.role!=='employee')return send(res,403,{error:'Çalışan erişimi gerekli'});
+ const b=await read(req);
+ const entitlement=await pool.query('SELECT id FROM yp.entitlements WHERE id=$1 AND employee_id=$2 AND used<granted AND current_date BETWEEN valid_from AND valid_until',[b.entitlement_id,a.employee_id]);
+ if(!entitlement.rowCount)return send(res,404,{error:'Aktif yemek hakkı bulunamadı'});
+ const exp=Date.now()+60000;
+ const payload=Buffer.from(JSON.stringify({entitlement_id:b.entitlement_id,exp,nonce:randomUUID()})).toString('base64url');
+ return send(res,200,{token:payload+'.'+qrSign(payload),expires_at:new Date(exp).toISOString()});
+}
 if(!validSession(req))return send(res,401,{error:'Yönetici girişi gerekli'});
+if(req.method==='POST'&&path==='/api/portal/accounts'){
+ const b=await read(req);
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ const table={company:'companies',restaurant:'restaurants',employee:'employees'}[b.role];
+ if(!table||!uuid.test(b.subject_id))return send(res,400,{error:'Geçerli rol ve kayıt gerekli'});
+ const found=await pool.query('SELECT id FROM yp.'+table+' WHERE id=$1',[b.subject_id]);
+ if(!found.rowCount)return send(res,404,{error:'Kayıt bulunamadı'});
+ const token=randomBytes(32).toString('hex');
+ const hash=createHmac('sha256',sessionSecret).update(token).digest('hex');
+ const column={company:'company_id',restaurant:'restaurant_id',employee:'employee_id'}[b.role];
+ await pool.query('INSERT INTO yp.portal_accounts(role,'+column+',token_hash) VALUES($1,$2,$3)',[b.role,b.subject_id,hash]);
+ return send(res,201,{role:b.role,token,warning:'Bu erişim anahtarı yalnızca bir kez gösterilir. Güvenli biçimde teslim edin.'});
+}
+
 if(req.method==='GET'&&path==='/api/health'){await pool.query('select 1');return send(res,200,{ok:true})}
 if(req.method==='GET'&&path==='/api/companies'){const r=await pool.query('select id,name from yp.companies order by name');return send(res,200,r.rows)}
 if(req.method==='POST'&&path==='/api/companies'){const b=await read(req);if(!validName(b.name))return send(res,400,{error:'Firma adı 2-160 karakter olmalı'});const r=await pool.query('insert into yp.companies(id,name) values($1,$2) returning id,name',[randomUUID(),b.name.trim()]);return send(res,201,r.rows[0])}
@@ -222,7 +273,7 @@ if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem
    await client.query('ROLLBACK');return send(res,409,{error:'Kullanılabilir yemek hakkı yok veya tarih geçersiz'});
   }
   if(x.payment_model==='prepaid'){
-   const balance=await client.query(`SELECT COALESCE(SUM(CASE WHEN entry_type='advance' THEN amount_kurus WHEN entry_type='consumption' THEN -amount_kurus ELSE 0 END),0)::bigint AS balance FROM yp.ledger_entries WHERE agreement_id=$1`,[x.agreement_id]);
+   const balance=await client.query(`SELECT COALESCE(SUM(CASE WHEN entry_type='advance' THEN amount_kurus WHEN entry_type='consumption' THEN -amount_kurus WHEN entry_type='reversal' THEN amount_kurus ELSE 0 END),0)::bigint AS balance FROM yp.ledger_entries WHERE agreement_id=$1`,[x.agreement_id]);
    if(BigInt(balance.rows[0].balance)<BigInt(x.price_kurus)){await client.query('ROLLBACK');return send(res,409,{error:'Firma avansı yetersiz'})}
   }
   const redemptionId=randomUUID();
