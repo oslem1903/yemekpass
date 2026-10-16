@@ -1,16 +1,15 @@
 import http from 'node:http';
 import {Pool} from 'pg';
 import {randomUUID,randomBytes,scryptSync,timingSafeEqual,createHmac} from 'node:crypto';
-import {readFileSync} from 'node:fs';
-import {resolve} from 'node:path';
-const env=readFileSync(resolve(process.cwd(),'..','.env'),'utf8');
-const password=env.match(/^POSTGRES_PASSWORD=(.+)$/m)?.[1]?.trim();
-if(!password)throw Error('Missing POSTGRES_PASSWORD in root .env');
-const adminPassword=env.match(/^YEMEKPASS_ADMIN_PASSWORD=(.+)$/m)?.[1]?.trim();
+import {fileURLToPath} from 'node:url';
+const adminPassword=process.env.YEMEKPASS_ADMIN_PASSWORD;
 if(!adminPassword||adminPassword.length<16)throw Error('Set YEMEKPASS_ADMIN_PASSWORD (at least 16 characters) in root .env');
 const salt=randomBytes(32);
 const passwordHash=scryptSync(adminPassword,salt,64);
-const qrSecret=randomBytes(32);
+const qrSecret=process.env.YEMEKPASS_QR_SECRET ? Buffer.from(process.env.YEMEKPASS_QR_SECRET,'utf8') : null;
+if(!qrSecret||qrSecret.length<32)throw Error('Set YEMEKPASS_QR_SECRET to a stable random secret of at least 32 bytes');
+const sessionSecret=process.env.YEMEKPASS_SESSION_SECRET;
+if(!sessionSecret||sessionSecret.length<32)throw Error('Set YEMEKPASS_SESSION_SECRET to a stable random secret of at least 32 characters');
 const qrSign=data=>createHmac('sha256',qrSecret).update(data).digest('base64url');
 const qrVerify=token=>{
  if(typeof token!=='string'||token.length>512)return null;
@@ -21,30 +20,35 @@ const qrVerify=token=>{
  if(x.length!==y.length||!timingSafeEqual(x,y))return null;
  try{const value=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));if(!Number.isSafeInteger(value.exp)||value.exp<Date.now()||value.exp>Date.now()+120000)return null;return value}catch{return null}
 };
-const sessions=new Map();
 const loginFailures=new Map();
 const sessionDurationMs=8*60*60*1000;
 const cookieName='yp_session';
 const cookieValue=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1);
-const validSession=req=>{const token=cookieValue(req);if(!token)return false;const expires=sessions.get(token);if(!expires)return false;if(expires<Date.now()){sessions.delete(token);return false}return true};
-const pool=new Pool({host:'127.0.0.1',port:5439,database:'yemekpass',user:'yemekpass',password});
+const signSession=payload=>createHmac('sha256',sessionSecret).update(payload).digest('base64url');
+const validSession=req=>{const token=cookieValue(req);if(!token||token.length>256)return false;const parts=token.split('.');if(parts.length!==2)return false;const [payload,signature]=parts;const expected=signSession(payload);if(signature.length!==expected.length||!timingSafeEqual(Buffer.from(signature),Buffer.from(expected)))return false;try{const value=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));return Number.isSafeInteger(value.exp)&&value.exp>Date.now()&&value.exp<=Date.now()+sessionDurationMs}catch{return false}};
+const databaseUrl=process.env.DATABASE_URL;
+if(!databaseUrl)throw Error('Missing DATABASE_URL (Supabase transaction pooler URI)');
+const pool=new Pool({connectionString:databaseUrl,ssl:{rejectUnauthorized:true},max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
 const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
 const read=async(req)=>{let s='';for await(const c of req){s+=c;if(s.length>12000)throw Error('Request too large')}return JSON.parse(s||'{}')};
 const validName=v=>typeof v==='string'&&v.trim().length>=2&&v.trim().length<=160;
-const server=http.createServer(async(req,res)=>{
+export default async function handler(req,res){
 try{
 const path=new URL(req.url,'http://127.0.0.1').pathname;
 const origin=req.headers.origin;
 if(!['GET','HEAD','OPTIONS'].includes(req.method)){
  const allowed=new Set(['http://localhost:5173','http://127.0.0.1:5173']);
+ const host=req.headers.host;
+ if(host&&/^[a-z0-9.-]+(?::\d+)?$/i.test(host))allowed.add('https://'+host);
  if(!origin||!allowed.has(origin))return send(res,403,{error:'İstek yalnızca yerel YemekPASS arayüzünden yapılabilir'});
  const type=(req.headers['content-type']||'').split(';')[0].trim().toLowerCase();
  if(type!=='application/json')return send(res,415,{error:'JSON içerik türü gerekli'});
 }
 
+if(req.method==='GET'&&path==='/api/health'){await pool.query('select 1');return send(res,200,{ok:true})}
 if(req.method==='GET'&&path==='/api/session')return send(res,200,{authenticated:validSession(req)});
 if(req.method==='POST'&&path==='/api/login'){
- const key=req.socket.remoteAddress||'local';
+ const key=req.headers['x-forwarded-for']?.split(',')[0]?.trim()||req.socket?.remoteAddress||'local';
  const attempts=loginFailures.get(key)||{count:0,until:0};
  if(attempts.until>Date.now())return send(res,429,{error:'Çok fazla hatalı giriş. Biraz bekleyin'});
  const b=await read(req);
@@ -57,14 +61,13 @@ if(req.method==='POST'&&path==='/api/login'){
   return send(res,401,{error:'Parola hatalı'});
  }
  loginFailures.delete(key);
- const token=randomBytes(32).toString('hex');
- sessions.set(token,Date.now()+sessionDurationMs);
- res.setHeader('Set-Cookie',cookieName+'='+token+'; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800');
+ const payload=Buffer.from(JSON.stringify({exp:Date.now()+sessionDurationMs,nonce:randomUUID()})).toString('base64url');
+ const token=payload+'.'+signSession(payload);
+ res.setHeader('Set-Cookie',cookieName+'='+token+'; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=28800');
  return send(res,200,{authenticated:true});
 }
 if(req.method==='POST'&&path==='/api/logout'){
- const token=cookieValue(req);if(token)sessions.delete(token);
- res.setHeader('Set-Cookie',cookieName+'=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0');
+ res.setHeader('Set-Cookie',cookieName+'=; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=0');
  return send(res,200,{authenticated:false});
 }
 if(!validSession(req))return send(res,401,{error:'Yönetici girişi gerekli'});
@@ -214,5 +217,7 @@ if(req.method==='POST'&&path==='/api/meal-setup'){
 }
 return send(res,404,{error:'Endpoint bulunamadı'});
 }catch(e){if(e.code==='23503')return send(res,400,{error:'Firma bulunamadı'});if(e instanceof SyntaxError)return send(res,400,{error:'Geçersiz JSON'});console.error(e);return send(res,500,{error:'İşlem başarısız'})}
-});
-server.listen(4174,'127.0.0.1',()=>console.log('YemekPASS LOCAL API http://127.0.0.1:4174'));
+}
+if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
+ http.createServer(handler).listen(4174,'127.0.0.1',()=>console.log('YemekPASS local API on port 4174'));
+}
