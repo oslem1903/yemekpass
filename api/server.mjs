@@ -26,7 +26,7 @@ const cookieName='yp_session';
 const cookieValue=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1);
 const signSession=payload=>createHmac('sha256',sessionSecret).update(payload).digest('base64url');
 const validSession=req=>{const token=cookieValue(req);if(!token||token.length>256)return false;const parts=token.split('.');if(parts.length!==2)return false;const [payload,signature]=parts;const expected=signSession(payload);if(signature.length!==expected.length||!timingSafeEqual(Buffer.from(signature),Buffer.from(expected)))return false;try{const value=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));return Number.isSafeInteger(value.exp)&&value.exp>Date.now()&&value.exp<=Date.now()+sessionDurationMs}catch{return false}};
-const databaseUrl=process.env.DATABASE_URL;
+const databaseUrl=process.env.POSTGRES_URL || process.env.DATABASE_URL;
 if(!databaseUrl)throw Error('Missing DATABASE_URL (Supabase transaction pooler URI)');
 const dbUrl=new URL(databaseUrl);
 const dbCa=process.env.SUPABASE_DB_CA_CERT?.replace(/\\n/g,'\n');
