@@ -113,7 +113,12 @@ if(req.method==='POST'&&path==='/api/portal/employee-qr'){
  const payload=Buffer.from(JSON.stringify({entitlement_id:b.entitlement_id,exp,nonce:randomUUID()})).toString('base64url');
  return send(res,200,{token:payload+'.'+qrSign(payload),expires_at:new Date(exp).toISOString()});
 }
-if(!validSession(req))return send(res,401,{error:'Yönetici girişi gerekli'});
+let restaurantPortal=null;
+if(req.method==='POST'&&path==='/api/qr/redeem'&&!validSession(req)){
+ restaurantPortal=await portalAuth();
+ if(!restaurantPortal||restaurantPortal.role!=='restaurant')return send(res,403,{error:'Yetkili lokanta erişimi gerekli'});
+}
+if(!validSession(req)&&!restaurantPortal)return send(res,401,{error:'Yönetici girişi gerekli'});
 if(req.method==='POST'&&path==='/api/portal/accounts'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -249,6 +254,9 @@ if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem
   WHERE e.id=$1 AND a.active=true FOR UPDATE OF e`,[b.entitlement_id]);
   if(!r.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'Aktif yemek hakkı bulunamadı'})}
   const x=r.rows[0];
+  if(restaurantPortal&&x.restaurant_id!==restaurantPortal.restaurant_id){
+   await client.query('ROLLBACK');return send(res,403,{error:'Bu yemek hakkı başka lokantaya ait'});
+  }
   // Serialize prepaid redemptions for the same agreement to prevent overspending.
   if(x.payment_model==='prepaid')await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[x.agreement_id]);
   const policy=await client.query('SELECT daily_limit,start_time::text,end_time::text,weekdays FROM yp.meal_policies WHERE agreement_id=$1',[x.agreement_id]);
