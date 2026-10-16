@@ -180,6 +180,24 @@ if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem
   WHERE e.id=$1 AND a.active=true FOR UPDATE OF e`,[b.entitlement_id]);
   if(!r.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'Aktif yemek hakkı bulunamadı'})}
   const x=r.rows[0];
+  // Serialize prepaid redemptions for the same agreement to prevent overspending.
+  if(x.payment_model==='prepaid')await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[x.agreement_id]);
+  const policy=await client.query('SELECT daily_limit,start_time::text,end_time::text,weekdays FROM yp.meal_policies WHERE agreement_id=$1',[x.agreement_id]);
+  const rule=policy.rows[0]||{daily_limit:1,start_time:'00:00:00',end_time:'23:59:59',weekdays:[1,2,3,4,5,6,7]};
+  const istanbulParts=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Istanbul',weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());
+  const part=key=>istanbulParts.find(x=>x.type===key)?.value;
+  const weekdayNumber={Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6,Sun:7}[part('weekday')];
+  const localTime=part('hour')+':'+part('minute');
+  if(!rule.weekdays.includes(weekdayNumber)||localTime<rule.start_time.slice(0,5)||localTime>rule.end_time.slice(0,5)){
+   await client.query('ROLLBACK');return send(res,409,{error:'Yemek kullanımı bugün veya bu saat aralığında kapalı'});
+  }
+  const usedToday=await client.query(`SELECT count(*)::integer AS total FROM yp.redemptions
+    WHERE entitlement_id IN (SELECT id FROM yp.entitlements WHERE employee_id=(SELECT employee_id FROM yp.entitlements WHERE id=$1))
+    AND reversed_at IS NULL AND (created_at AT TIME ZONE 'Europe/Istanbul')::date=(now() AT TIME ZONE 'Europe/Istanbul')::date
+    AND restaurant_id=$2`,[b.entitlement_id,x.restaurant_id]);
+  if(usedToday.rows[0].total>=rule.daily_limit){
+   await client.query('ROLLBACK');return send(res,409,{error:'Günlük yemek kullanım limitine ulaşıldı'});
+  }
   const today=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Istanbul'});
   const dateOnly=v=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
   if(!x.active||x.used>=x.granted||today<dateOnly(x.valid_from)||today>dateOnly(x.valid_until)){
@@ -196,6 +214,27 @@ if(req.method==='POST'&&(path==='/api/local-test/redeem'||path==='/api/qr/redeem
   await client.query('COMMIT');
   return send(res,201,{ok:true,redemption_id:redemptionId,remaining:x.granted-x.used-1,amount_kurus:Number(x.price_kurus)});
  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return send(res,409,{error:'Bu işlem zaten işlendi'});throw e}finally{client.release()}
+}
+if(req.method==='POST'&&path==='/api/redemptions/reverse'){
+ const b=await read(req);
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ if(!uuid.test(b.redemption_id)||typeof b.reason!=='string'||b.reason.trim().length<5||b.reason.trim().length>500)return send(res,400,{error:'Geçerli tüketim ve en az 5 karakterlik iptal gerekçesi gerekli'});
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  const row=await client.query(`SELECT r.id,r.entitlement_id,r.reversed_at,r.amount_kurus,a.id AS agreement_id
+   FROM yp.redemptions r JOIN yp.entitlements e ON e.id=r.entitlement_id
+   JOIN yp.meal_categories mc ON mc.id=e.category_id JOIN yp.agreements a ON a.id=mc.agreement_id
+   WHERE r.id=$1 FOR UPDATE OF r`,[b.redemption_id]);
+  if(!row.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'Tüketim bulunamadı'})}
+  const x=row.rows[0];
+  if(x.reversed_at){await client.query('ROLLBACK');return send(res,409,{error:'Bu tüketim zaten iptal edilmiş'})}
+  await client.query('UPDATE yp.redemptions SET reversed_at=now() WHERE id=$1',[x.id]);
+  await client.query('UPDATE yp.entitlements SET used=used-1 WHERE id=$1 AND used>0',[x.entitlement_id]);
+  await client.query('INSERT INTO yp.reversal_audit(redemption_id,reason,reversed_by) VALUES($1,$2,$3)',[x.id,b.reason.trim(),'admin']);
+  if(BigInt(x.amount_kurus)>0)await client.query("INSERT INTO yp.ledger_entries(agreement_id,redemption_id,entry_type,amount_kurus) VALUES($1,$2,'reversal',$3)",[x.agreement_id,x.id,x.amount_kurus]);
+  await client.query('COMMIT');return send(res,200,{ok:true,reversed:true});
+ }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }
 if(req.method==='POST'&&path==='/api/meal-setup'){
  const b=await read(req);
