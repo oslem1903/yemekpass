@@ -28,7 +28,8 @@ const signSession=payload=>createHmac('sha256',sessionSecret).update(payload).di
 const validSession=req=>{const token=cookieValue(req);if(!token||token.length>256)return false;const parts=token.split('.');if(parts.length!==2)return false;const [payload,signature]=parts;const expected=signSession(payload);if(signature.length!==expected.length||!timingSafeEqual(Buffer.from(signature),Buffer.from(expected)))return false;try{const value=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));return Number.isSafeInteger(value.exp)&&value.exp>Date.now()&&value.exp<=Date.now()+sessionDurationMs}catch{return false}};
 const databaseUrl=process.env.DATABASE_URL;
 if(!databaseUrl)throw Error('Missing DATABASE_URL (Supabase transaction pooler URI)');
-const pool=new Pool({connectionString:databaseUrl,ssl:{rejectUnauthorized:true},options:'-c search_path=yp,public',max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
+const pool=new Pool({connectionString:databaseUrl,ssl:{rejectUnauthorized:true},max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000});
+pool.on('connect',client=>{client.query('SET search_path TO yp, public').catch(console.error)});
 const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
 const read=async(req)=>{if(req.body&&typeof req.body==='object'&&!Buffer.isBuffer(req.body))return req.body;let s='';for await(const c of req){s+=c;if(s.length>12000)throw Error('Request too large')}return JSON.parse(s||'{}')};
 const validName=v=>typeof v==='string'&&v.trim().length>=2&&v.trim().length<=160;
