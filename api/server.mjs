@@ -132,7 +132,7 @@ if(req.method==='POST'&&path==='/api/portal/revoke'){
 if(req.method==='POST'&&path==='/api/meal-policies'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
- const time=/^(?:[01]\\d|2[0-3]):[0-5]\\d$/;
+ const time=/^(?:[01]\d|2[0-3]):[0-5]\d$/;
  if(!uuid.test(b.agreement_id)||!Number.isInteger(b.daily_limit)||b.daily_limit<1||b.daily_limit>10||!time.test(b.start_time)||!time.test(b.end_time)||b.start_time>=b.end_time||!Array.isArray(b.weekdays)||!b.weekdays.length||b.weekdays.some(x=>!Number.isInteger(x)||x<1||x>7))return send(res,400,{error:'Geçerli günlük limit, saat ve gün seçimi gerekli'});
  const r=await pool.query(`INSERT INTO yp.meal_policies(agreement_id,daily_limit,start_time,end_time,weekdays)
  VALUES($1,$2,$3,$4,$5::integer[]) ON CONFLICT(agreement_id) DO UPDATE SET daily_limit=EXCLUDED.daily_limit,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,weekdays=EXCLUDED.weekdays RETURNING agreement_id,daily_limit,start_time::text,end_time::text,weekdays`,[b.agreement_id,b.daily_limit,b.start_time,b.end_time,[...new Set(b.weekdays)]]);
@@ -336,7 +336,7 @@ if(req.method==='POST'&&path==='/api/redemptions/reverse'){
 if(req.method==='POST'&&path==='/api/meal-setup'){
  const b=await read(req);
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
- if(!uuid.test(b.company_id)||!uuid.test(b.employee_id)||!validName(b.category_name)||!['prepaid','postpaid'].includes(b.payment_model)||!Number.isSafeInteger(b.price_kurus)||b.price_kurus<0||!Number.isSafeInteger(b.granted)||b.granted<1||b.granted>1000||!/^\\d{4}-\\d{2}-\\d{2}$/.test(b.valid_from)||!/^\\d{4}-\\d{2}-\\d{2}$/.test(b.valid_until)||b.valid_until<b.valid_from)return send(res,400,{error:'Geçerli firma, personel, yemek, fiyat, adet ve tarih girin'});
+ if(!uuid.test(b.company_id)||!uuid.test(b.employee_id)||!validName(b.category_name)||!['prepaid','postpaid'].includes(b.payment_model)||!Number.isSafeInteger(b.price_kurus)||b.price_kurus<0||!Number.isSafeInteger(b.granted)||b.granted<1||b.granted>1000||!/^\d{4}-\d{2}-\d{2}$/.test(b.valid_from)||!/^\d{4}-\d{2}-\d{2}$/.test(b.valid_until)||b.valid_until<b.valid_from)return send(res,400,{error:'Geçerli firma, personel, yemek, fiyat, adet ve tarih girin'});
  const client=await pool.connect();
  try{await client.query('BEGIN');
  const belongs=await client.query('SELECT id FROM yp.employees WHERE id=$1 AND company_id=$2 AND active=true',[b.employee_id,b.company_id]);
